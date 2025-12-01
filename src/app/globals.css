@@ -1,0 +1,186 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Paper texture overlay */
+.paper-texture {
+  position: relative;
+}
+
+.paper-texture::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 400 400' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E");
+  opacity: 0.03;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.paper-texture > * {
+  position: relative;
+  z-index: 2;
+}
+
+/* Subtle paper grain */
+.paper-grain {
+  background-image:
+    linear-gradient(to right, rgba(139, 90, 43, 0.01) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(139, 90, 43, 0.01) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+/* Deckled edge effect */
+.deckled-edge {
+  position: relative;
+}
+
+.deckled-edge::after {
+  content: '';
+  position: absolute;
+  bottom: -2px;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    currentColor 2%,
+    currentColor 8%,
+    transparent 10%,
+    transparent 15%,
+    currentColor 17%,
+    currentColor 23%,
+    transparent 25%,
+    transparent 30%,
+    currentColor 32%,
+    currentColor 38%,
+    transparent 40%,
+    transparent 45%,
+    currentColor 47%,
+    currentColor 53%,
+    transparent 55%,
+    transparent 60%,
+    currentColor 62%,
+    currentColor 68%,
+    transparent 70%,
+    transparent 75%,
+    currentColor 77%,
+    currentColor 83%,
+    transparent 85%,
+    transparent 90%,
+    currentColor 92%,
+    currentColor 98%,
+    transparent 100%
+  );
+  opacity: 0.15;
+}
+
+/* Embossed text effect */
+.text-emboss {
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8),
+    0 -1px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* Letter-pressed effect */
+.text-letterpress {
+  text-shadow:
+    0 1px 1px rgba(255, 255, 255, 0.6),
+    0 -1px 1px rgba(0, 0, 0, 0.2);
+}
+
+/* Drop zone styling */
+.drop-zone {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.drop-zone.drag-over {
+  transform: scale(1.01);
+  border-color: rgba(139, 90, 43, 0.6);
+  background-color: rgba(139, 90, 43, 0.05);
+}
+
+/* Button press effect */
+.btn-press {
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.btn-press:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+/* Progress bar animation */
+@keyframes progress-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.progress-animated {
+  animation: progress-pulse 1.5s ease-in-out infinite;
+}
+
+/* Smooth scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(139, 90, 43, 0.05);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(139, 90, 43, 0.2);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(139, 90, 43, 0.3);
+}
+
+/* Selection styling */
+::selection {
+  background: rgba(139, 90, 43, 0.2);
+  color: inherit;
+}
+
+/* Focus ring */
+.focus-ring:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(139, 90, 43, 0.3);
+}
+
+/* Fade in animation */
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+/* Stagger children animations */
+.stagger-children > * {
+  opacity: 0;
+  animation: fade-in-up 0.5s ease-out forwards;
+}
+
+.stagger-children > *:nth-child(1) { animation-delay: 0.1s; }
+.stagger-children > *:nth-child(2) { animation-delay: 0.2s; }
+.stagger-children > *:nth-child(3) { animation-delay: 0.3s; }
+.stagger-children > *:nth-child(4) { animation-delay: 0.4s; }
+.stagger-children > *:nth-child(5) { animation-delay: 0.5s; }
