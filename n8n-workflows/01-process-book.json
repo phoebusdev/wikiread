@@ -1,0 +1,322 @@
+{
+  "name": "WikiRead: Process Book",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "process-book",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "process-book"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "books",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.book_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "processing_status",
+              "fieldValue": "processing"
+            }
+          ]
+        }
+      },
+      "id": "supabase-1",
+      "name": "Update Status Processing",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $('Webhook').item.json.file_url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          }
+        }
+      },
+      "id": "http-1",
+      "name": "Download Book File",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [680, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const JSZip = require('jszip');\n\n// Get file from previous node\nconst items = $input.all();\nconst fileData = items[0].binary?.data;\nconst bookId = $('Webhook').item.json.book_id;\n\nif (!fileData) {\n  throw new Error('No file data received');\n}\n\n// Parse EPUB\nconst zip = await JSZip.loadAsync(Buffer.from(fileData.data, 'base64'));\nconst chunks = [];\n\n// Find all HTML/XHTML files\nconst files = Object.keys(zip.files);\nconst htmlFiles = files.filter(f => /\\.(x?html?)$/i.test(f) && !zip.files[f].dir);\n\nlet chunkIndex = 0;\nlet chapterNumber = 0;\n\nfor (const filePath of htmlFiles) {\n  const content = await zip.files[filePath].async('string');\n  chapterNumber++;\n  \n  // Extract chapter title\n  const titleMatch = content.match(/<title>([^<]+)<\\/title>/i) || \n                     content.match(/<h1[^>]*>([^<]+)<\\/h1>/i) ||\n                     content.match(/<h2[^>]*>([^<]+)<\\/h2>/i);\n  const chapterTitle = titleMatch ? titleMatch[1].trim() : `Chapter ${chapterNumber}`;\n  \n  // Strip HTML and clean text\n  let textContent = content\n    .replace(/<script[^>]*>[\\s\\S]*?<\\/script>/gi, '')\n    .replace(/<style[^>]*>[\\s\\S]*?<\\/style>/gi, '')\n    .replace(/<[^>]+>/g, '\\n')\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#?\\w+;/g, ' ')\n    .replace(/\\n+/g, '\\n')\n    .trim();\n  \n  // Split into paragraphs\n  const paragraphs = textContent\n    .split(/\\n+/)\n    .map(p => p.trim())\n    .filter(p => p.length > 30);\n  \n  // Create chunks (~500 tokens each, roughly 2000 chars)\n  let currentChunk = '';\n  let paragraphIndex = 0;\n  \n  for (const para of paragraphs) {\n    if (currentChunk.length + para.length > 2000 && currentChunk.length > 100) {\n      chunks.push({\n        book_id: bookId,\n        chapter_number: chapterNumber,\n        chapter_title: chapterTitle,\n        chunk_index: chunkIndex++,\n        content: currentChunk.trim(),\n        content_type: 'body',\n        paragraph_index: paragraphIndex,\n        word_count: currentChunk.split(/\\s+/).length\n      });\n      currentChunk = para;\n    } else {\n      currentChunk += (currentChunk ? '\\n\\n' : '') + para;\n    }\n    paragraphIndex++;\n  }\n  \n  // Last chunk for this file\n  if (currentChunk.length > 100) {\n    chunks.push({\n      book_id: bookId,\n      chapter_number: chapterNumber,\n      chapter_title: chapterTitle,\n      chunk_index: chunkIndex++,\n      content: currentChunk.trim(),\n      content_type: 'body',\n      paragraph_index: paragraphIndex,\n      word_count: currentChunk.split(/\\s+/).length\n    });\n  }\n}\n\n// Sample content for analysis (first ~8000 chars)\nconst sampleContent = chunks\n  .slice(0, 5)\n  .map(c => c.content)\n  .join('\\n\\n---\\n\\n')\n  .slice(0, 8000);\n\nreturn {\n  json: {\n    book_id: bookId,\n    chunks: chunks,\n    sampleContent: sampleContent,\n    totalChunks: chunks.length,\n    totalChapters: chapterNumber\n  }\n};"
+      },
+      "id": "code-1",
+      "name": "Extract Text and Chunk",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {},
+        "text": "={{ $json.chunks.map(c => c.content) }}"
+      },
+      "id": "openai-embed",
+      "name": "Generate Embeddings",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [1120, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine chunks with embeddings\nconst chunks = $('Extract Text and Chunk').item.json.chunks;\nconst embeddings = $('Generate Embeddings').item.json;\n\n// Note: The actual embedding format depends on how n8n returns them\n// This may need adjustment based on actual output\nconst chunksWithEmbeddings = chunks.map((chunk, i) => ({\n  ...chunk,\n  embedding: embeddings[i] || null\n}));\n\nreturn {\n  json: {\n    book_id: $('Extract Text and Chunk').item.json.book_id,\n    chunksWithEmbeddings: chunksWithEmbeddings,\n    sampleContent: $('Extract Text and Chunk').item.json.sampleContent,\n    totalChunks: chunks.length\n  }\n};"
+      },
+      "id": "code-2",
+      "name": "Merge Embeddings",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 300]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "book_chunks",
+        "fieldsUi": {
+          "fieldValues": "={{ $json.chunksWithEmbeddings }}"
+        }
+      },
+      "id": "supabase-2",
+      "name": "Store Chunks",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4-turbo-preview",
+        "messages": {
+          "values": [
+            {
+              "content": "You are an academic reading assistant. Analyze this text sample from a book and identify:\n\n1. Key authors, philosophers, or thinkers referenced or discussed\n2. Prerequisite concepts or theories the reader should understand\n3. Main philosophical, theoretical, or disciplinary frameworks used\n4. The overall topic/subject area\n\nReturn your analysis as JSON with this exact structure:\n{\n  \"authors\": [\"Author Name 1\", \"Author Name 2\"],\n  \"concepts\": [\"Concept 1\", \"Concept 2\"],\n  \"frameworks\": [\"Framework 1\", \"Framework 2\"],\n  \"subject_area\": \"Philosophy/History/etc\"\n}"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.sampleContent }}"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json_object"
+        }
+      },
+      "id": "openai-chat",
+      "name": "Analyze Prerequisites",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.4,
+      "position": [1780, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "books",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "processing_status",
+              "fieldValue": "ready"
+            },
+            {
+              "fieldName": "processed_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            },
+            {
+              "fieldName": "total_chapters",
+              "fieldValue": "={{ $('Extract Text and Chunk').item.json.totalChapters }}"
+            },
+            {
+              "fieldName": "metadata",
+              "fieldValue": "={{ JSON.stringify($json.message.content) }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-3",
+      "name": "Update Book Ready",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2000, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "id": "respond-1",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2220, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Update Status Processing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Status Processing": {
+      "main": [
+        [
+          {
+            "node": "Download Book File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download Book File": {
+      "main": [
+        [
+          {
+            "node": "Extract Text and Chunk",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Text and Chunk": {
+      "main": [
+        [
+          {
+            "node": "Generate Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Merge Embeddings",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Embeddings": {
+      "main": [
+        [
+          {
+            "node": "Store Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Chunks": {
+      "main": [
+        [
+          {
+            "node": "Analyze Prerequisites",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Analyze Prerequisites": {
+      "main": [
+        [
+          {
+            "node": "Update Book Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Book Ready": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

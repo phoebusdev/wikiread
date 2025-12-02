@@ -1,0 +1,265 @@
+{
+  "name": "WikiRead: Export to Zotero",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "export-zotero",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "export-zotero"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "books",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $json.book_id }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-1",
+      "name": "Get Book",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "annotations",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "book_id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            },
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('Webhook').item.json.user_id }}"
+            }
+          ]
+        },
+        "options": {
+          "orderBy": "chunk_index"
+        }
+      },
+      "id": "supabase-2",
+      "name": "Get Annotations",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "highlights",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "book_id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            },
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('Webhook').item.json.user_id }}"
+            }
+          ]
+        },
+        "options": {
+          "orderBy": "created_at"
+        }
+      },
+      "id": "supabase-3",
+      "name": "Get Highlights",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "user_notes",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "book_id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            },
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('Webhook').item.json.user_id }}"
+            }
+          ]
+        },
+        "options": {
+          "orderBy": "created_at"
+        }
+      },
+      "id": "supabase-4",
+      "name": "Get User Notes",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 900],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate Zotero RDF format\nconst book = $('Get Book').first().json;\nconst annotations = $('Get Annotations').all().map(i => i.json);\nconst highlights = $('Get Highlights').all().map(i => i.json);\nconst userNotes = $('Get User Notes').all().map(i => i.json);\nconst exportFormat = $('Webhook').item.json.format || 'rdf'; // rdf, json, markdown\n\n// Helper to escape XML\nconst escapeXml = (str) => {\n  if (!str) return '';\n  return str\n    .replace(/&/g, '&amp;')\n    .replace(/</g, '&lt;')\n    .replace(/>/g, '&gt;')\n    .replace(/\"/g, '&quot;')\n    .replace(/'/g, '&apos;');\n};\n\nif (exportFormat === 'rdf') {\n  // Generate Zotero-compatible RDF/XML\n  const rdf = `<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<rdf:RDF\n  xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"\n  xmlns:z=\"http://www.zotero.org/namespaces/export#\"\n  xmlns:dc=\"http://purl.org/dc/elements/1.1/\"\n  xmlns:dcterms=\"http://purl.org/dc/terms/\"\n  xmlns:bib=\"http://purl.org/net/biblio#\"\n  xmlns:foaf=\"http://xmlns.com/foaf/0.1/\">\n\n  <bib:Book rdf:about=\"urn:isbn:${escapeXml(book.isbn || book.id)}\">\n    <dc:title>${escapeXml(book.title)}</dc:title>\n    <dc:creator>\n      <foaf:Person>\n        <foaf:surname>${escapeXml(book.author?.split(' ').pop() || '')}</foaf:surname>\n        <foaf:givenName>${escapeXml(book.author?.split(' ').slice(0, -1).join(' ') || '')}</foaf:givenName>\n      </foaf:Person>\n    </dc:creator>\n    ${book.publisher ? `<dc:publisher>${escapeXml(book.publisher)}</dc:publisher>` : ''}\n    ${book.year ? `<dc:date>${escapeXml(book.year)}</dc:date>` : ''}\n    ${book.isbn ? `<dc:identifier>ISBN ${escapeXml(book.isbn)}</dc:identifier>` : ''}\n  </bib:Book>\n\n${annotations.map((ann, i) => `\n  <bib:Memo rdf:about=\"#annotation-${i}\">\n    <rdf:value>${escapeXml(ann.term)}: ${escapeXml(ann.explanation)}</rdf:value>\n    <dc:subject>${escapeXml(ann.annotation_type)}</dc:subject>\n    <dcterms:isPartOf rdf:resource=\"urn:isbn:${escapeXml(book.isbn || book.id)}\"/>\n    ${ann.wikipedia_url ? `<dc:relation>${escapeXml(ann.wikipedia_url)}</dc:relation>` : ''}\n  </bib:Memo>`).join('')}\n\n${highlights.map((hl, i) => `\n  <bib:Memo rdf:about=\"#highlight-${i}\">\n    <rdf:value>${escapeXml(hl.text)}</rdf:value>\n    <dc:subject>highlight</dc:subject>\n    <z:color>${escapeXml(hl.color || 'yellow')}</z:color>\n    <dcterms:isPartOf rdf:resource=\"urn:isbn:${escapeXml(book.isbn || book.id)}\"/>\n    ${hl.note ? `<z:note>${escapeXml(hl.note)}</z:note>` : ''}\n  </bib:Memo>`).join('')}\n\n${userNotes.map((note, i) => `\n  <bib:Memo rdf:about=\"#note-${i}\">\n    <rdf:value>${escapeXml(note.content)}</rdf:value>\n    <dc:subject>note</dc:subject>\n    <dcterms:isPartOf rdf:resource=\"urn:isbn:${escapeXml(book.isbn || book.id)}\"/>\n    <dc:date>${escapeXml(note.created_at)}</dc:date>\n  </bib:Memo>`).join('')}\n\n</rdf:RDF>`;\n\n  return {\n    json: {\n      format: 'rdf',\n      filename: `${book.title.replace(/[^a-z0-9]/gi, '_')}_annotations.rdf`,\n      content: rdf,\n      mimeType: 'application/rdf+xml'\n    }\n  };\n}\n\nif (exportFormat === 'json') {\n  // Zotero JSON format\n  const zoteroJson = {\n    items: [\n      {\n        itemType: 'book',\n        title: book.title,\n        creators: [{\n          creatorType: 'author',\n          firstName: book.author?.split(' ').slice(0, -1).join(' ') || '',\n          lastName: book.author?.split(' ').pop() || ''\n        }],\n        publisher: book.publisher || '',\n        date: book.year || '',\n        ISBN: book.isbn || '',\n        notes: [\n          ...annotations.map(ann => ({\n            itemType: 'note',\n            note: `<h3>${ann.term}</h3><p>${ann.explanation}</p>${ann.wikipedia_url ? `<p><a href=\"${ann.wikipedia_url}\">Wikipedia</a></p>` : ''}`,\n            tags: [{ tag: ann.annotation_type }]\n          })),\n          ...highlights.map(hl => ({\n            itemType: 'note',\n            note: `<blockquote>${hl.text}</blockquote>${hl.note ? `<p>${hl.note}</p>` : ''}`,\n            tags: [{ tag: 'highlight' }, { tag: hl.color || 'yellow' }]\n          })),\n          ...userNotes.map(note => ({\n            itemType: 'note',\n            note: note.content,\n            tags: [{ tag: 'personal-note' }]\n          }))\n        ]\n      }\n    ]\n  };\n\n  return {\n    json: {\n      format: 'json',\n      filename: `${book.title.replace(/[^a-z0-9]/gi, '_')}_annotations.json`,\n      content: JSON.stringify(zoteroJson, null, 2),\n      mimeType: 'application/json'\n    }\n  };\n}\n\n// Markdown format (for easy reading/sharing)\nconst markdown = `# ${book.title}\n**Author:** ${book.author || 'Unknown'}\n${book.year ? `**Year:** ${book.year}` : ''}\n${book.isbn ? `**ISBN:** ${book.isbn}` : ''}\n\n---\n\n## Annotations\n\n${annotations.map(ann => `### ${ann.term}\n*Type: ${ann.annotation_type}*\n\n${ann.explanation}\n\n${ann.wikipedia_url ? `[Wikipedia](${ann.wikipedia_url})` : ''}\n`).join('\\n')}\n\n---\n\n## Highlights\n\n${highlights.map(hl => `> ${hl.text}\n\n${hl.note ? `*Note: ${hl.note}*` : ''}\n`).join('\\n')}\n\n---\n\n## Notes\n\n${userNotes.map(note => `- ${note.content}\n`).join('\\n')}\n\n---\n*Exported from WikiRead Scholar on ${new Date().toISOString().split('T')[0]}*\n`;\n\nreturn {\n  json: {\n    format: 'markdown',\n    filename: `${book.title.replace(/[^a-z0-9]/gi, '_')}_annotations.md`,\n    content: markdown,\n    mimeType: 'text/markdown'\n  }\n};"
+      },
+      "id": "code-1",
+      "name": "Generate Export",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 500]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Disposition",
+                "value": "attachment; filename=\"{{ $json.filename }}\""
+              },
+              {
+                "name": "Content-Type",
+                "value": "={{ $json.mimeType }}"
+              }
+            ]
+          }
+        }
+      },
+      "id": "respond-1",
+      "name": "Respond with File",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 500]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get Book",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Annotations",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Highlights",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get User Notes",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Book": {
+      "main": [
+        [
+          {
+            "node": "Generate Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Annotations": {
+      "main": [
+        [
+          {
+            "node": "Generate Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Highlights": {
+      "main": [
+        [
+          {
+            "node": "Generate Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User Notes": {
+      "main": [
+        [
+          {
+            "node": "Generate Export",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Export": {
+      "main": [
+        [
+          {
+            "node": "Respond with File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

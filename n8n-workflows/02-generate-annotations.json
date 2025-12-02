@@ -1,0 +1,385 @@
+{
+  "name": "WikiRead: Generate Annotations",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "generate-annotations",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "generate-annotations"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "user_profiles",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $json.user_id }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-1",
+      "name": "Get User Profile",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "book_chunks",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "book_id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            }
+          ]
+        },
+        "options": {
+          "orderBy": "chunk_index",
+          "limit": 500
+        }
+      },
+      "id": "supabase-2",
+      "name": "Get Book Chunks",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine user profile and book chunks\nconst profile = $('Get User Profile').first().json;\nconst chunks = $('Get Book Chunks').all().map(item => item.json);\nconst bookId = $('Webhook').item.json.book_id;\nconst userId = $('Webhook').item.json.user_id;\n\n// Build knowledge context from user's background\nconst knowledgeContext = {\n  academicLevel: profile.academic_level || 'undergraduate',\n  fieldsOfStudy: profile.fields_of_study || [],\n  booksRead: profile.books_read || [],\n  knownAuthors: profile.known_authors || [],\n  knownConcepts: profile.known_concepts || []\n};\n\n// Prepare chunks for batch annotation processing\n// Process in batches of 10 chunks\nconst batchSize = 10;\nconst batches = [];\n\nfor (let i = 0; i < chunks.length; i += batchSize) {\n  batches.push({\n    batchIndex: Math.floor(i / batchSize),\n    chunks: chunks.slice(i, i + batchSize),\n    knowledgeContext: knowledgeContext,\n    bookId: bookId,\n    userId: userId\n  });\n}\n\nreturn batches.map(batch => ({ json: batch }));"
+      },
+      "id": "code-1",
+      "name": "Prepare Batches",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "id": "splitbatch-1",
+      "name": "Split In Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4-turbo-preview",
+        "messages": {
+          "values": [
+            {
+              "content": "You are an academic reading assistant that generates personalized annotations. The reader has the following background:\n\nAcademic Level: {{ $json.knowledgeContext.academicLevel }}\nFields of Study: {{ $json.knowledgeContext.fieldsOfStudy.join(', ') }}\nBooks Already Read: {{ $json.knowledgeContext.booksRead.slice(0, 20).join(', ') }}\nKnown Authors/Thinkers: {{ $json.knowledgeContext.knownAuthors.slice(0, 30).join(', ') }}\nKnown Concepts: {{ $json.knowledgeContext.knownConcepts.slice(0, 30).join(', ') }}\n\nAnalyze the following text passages and generate annotations ONLY for:\n1. Authors/thinkers the reader likely doesn't know (not in their known list)\n2. Concepts that need explanation given their academic level\n3. References to other works they haven't read\n4. Historical context that aids understanding\n\nDo NOT annotate concepts the reader already knows. Skip basic definitions for their field.\n\nReturn JSON array of annotations:\n[\n  {\n    \"chunk_index\": <number>,\n    \"term\": \"<exact term from text>\",\n    \"annotation_type\": \"author|concept|reference|context\",\n    \"explanation\": \"<2-3 sentence explanation appropriate for reader level>\",\n    \"wikipedia_link\": \"<Wikipedia URL if applicable>\",\n    \"confidence\": <0.0-1.0 how certain this needs annotation>\n  }\n]\n\nOnly include annotations with confidence > 0.7."
+            },
+            {
+              "role": "user",
+              "content": "={{ JSON.stringify($json.chunks.map(c => ({ index: c.chunk_index, content: c.content.slice(0, 1500) }))) }}"
+            }
+          ]
+        },
+        "options": {
+          "responseFormat": "json_object",
+          "maxTokens": 4000
+        }
+      },
+      "id": "openai-1",
+      "name": "Generate Batch Annotations",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.4,
+      "position": [1120, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse GPT response and prepare for database insert\nconst response = $json.message.content;\nconst batchData = $('Split In Batches').item.json;\n\nlet annotations = [];\ntry {\n  const parsed = JSON.parse(response);\n  annotations = Array.isArray(parsed) ? parsed : (parsed.annotations || []);\n} catch (e) {\n  console.error('Failed to parse annotations:', e);\n  return { json: { annotations: [], error: e.message } };\n}\n\n// Map to database format\nconst dbAnnotations = annotations\n  .filter(a => a.confidence > 0.7)\n  .map(a => ({\n    book_id: batchData.bookId,\n    user_id: batchData.userId,\n    chunk_index: a.chunk_index,\n    term: a.term,\n    annotation_type: a.annotation_type,\n    explanation: a.explanation,\n    wikipedia_url: a.wikipedia_link || null,\n    confidence: a.confidence,\n    is_personalized: true\n  }));\n\nreturn { json: { annotations: dbAnnotations, count: dbAnnotations.length } };"
+      },
+      "id": "code-2",
+      "name": "Parse Annotations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.count > 0 }}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "if-1",
+      "name": "Has Annotations?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1560, 400]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "annotations",
+        "fieldsUi": {
+          "fieldValues": "={{ $json.annotations }}"
+        }
+      },
+      "id": "supabase-3",
+      "name": "Store Annotations",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1780, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Continue to next batch\nreturn { json: { continue: true } };"
+      },
+      "id": "code-3",
+      "name": "Continue Loop",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2000, 400]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "user_books",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('Webhook').item.json.user_id }}"
+            },
+            {
+              "keyName": "book_id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "annotations_generated",
+              "fieldValue": "true"
+            },
+            {
+              "fieldName": "annotations_generated_at",
+              "fieldValue": "={{ new Date().toISOString() }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-4",
+      "name": "Update User Book Status",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [2220, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, message: 'Annotations generated' }) }}",
+        "options": {}
+      },
+      "id": "respond-1",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2440, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Get User Profile",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Book Chunks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User Profile": {
+      "main": [
+        [
+          {
+            "node": "Prepare Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Book Chunks": {
+      "main": [
+        [
+          {
+            "node": "Prepare Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Batches": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split In Batches": {
+      "main": [
+        [
+          {
+            "node": "Generate Batch Annotations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update User Book Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Batch Annotations": {
+      "main": [
+        [
+          {
+            "node": "Parse Annotations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Annotations": {
+      "main": [
+        [
+          {
+            "node": "Has Annotations?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Annotations?": {
+      "main": [
+        [
+          {
+            "node": "Store Annotations",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Continue Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Store Annotations": {
+      "main": [
+        [
+          {
+            "node": "Continue Loop",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Continue Loop": {
+      "main": [
+        [
+          {
+            "node": "Split In Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update User Book Status": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}

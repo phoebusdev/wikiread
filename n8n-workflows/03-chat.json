@@ -1,0 +1,358 @@
+{
+  "name": "WikiRead: Chat with Book",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "chat",
+        "options": {}
+      },
+      "id": "webhook-1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [240, 300],
+      "webhookId": "chat"
+    },
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {},
+        "text": "={{ $json.query }}"
+      },
+      "id": "openai-embed",
+      "name": "Embed Query",
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1,
+      "position": [460, 300],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT \n  bc.content,\n  bc.chapter_number,\n  bc.chapter_title,\n  bc.chunk_index,\n  1 - (bc.embedding <=> '[{{ $json.embedding }}]'::vector) as similarity\nFROM book_chunks bc\nWHERE bc.book_id = '{{ $('Webhook').item.json.book_id }}'\nORDER BY bc.embedding <=> '[{{ $json.embedding }}]'::vector\nLIMIT 8;"
+      },
+      "id": "supabase-1",
+      "name": "Vector Search",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [680, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "user_profiles",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "user_id",
+              "keyValue": "={{ $('Webhook').item.json.user_id }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-2",
+      "name": "Get User Profile",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "tableId": "books",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "keyValue": "={{ $('Webhook').item.json.book_id }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-3",
+      "name": "Get Book Info",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [460, 700],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine all context for the chat\nconst query = $('Webhook').item.json.query;\nconst selectedText = $('Webhook').item.json.selected_text || null;\nconst chatHistory = $('Webhook').item.json.chat_history || [];\nconst currentChapter = $('Webhook').item.json.current_chapter || null;\n\nconst vectorResults = $('Vector Search').all().map(item => item.json);\nconst profile = $('Get User Profile').first()?.json || {};\nconst book = $('Get Book Info').first()?.json || {};\n\n// Build context passages\nconst contextPassages = vectorResults\n  .filter(r => r.similarity > 0.7)\n  .map(r => `[Chapter ${r.chapter_number}: ${r.chapter_title}]\\n${r.content}`)\n  .join('\\n\\n---\\n\\n');\n\n// Build user knowledge context\nconst userContext = {\n  academicLevel: profile.academic_level || 'undergraduate',\n  fieldsOfStudy: profile.fields_of_study || [],\n  knownConcepts: (profile.known_concepts || []).slice(0, 50)\n};\n\nreturn {\n  json: {\n    query,\n    selectedText,\n    chatHistory: chatHistory.slice(-6), // Last 6 messages for context\n    currentChapter,\n    contextPassages,\n    userContext,\n    bookTitle: book.title || 'Unknown',\n    bookAuthor: book.author || 'Unknown'\n  }\n};"
+      },
+      "id": "code-1",
+      "name": "Prepare Chat Context",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 400]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "model": "gpt-4-turbo-preview",
+        "messages": {
+          "values": [
+            {
+              "content": "You are a scholarly reading assistant helping someone understand \"{{ $json.bookTitle }}\" by {{ $json.bookAuthor }}.\n\nReader's Background:\n- Academic Level: {{ $json.userContext.academicLevel }}\n- Fields of Study: {{ $json.userContext.fieldsOfStudy.join(', ') || 'Not specified' }}\n- Known Concepts: {{ $json.userContext.knownConcepts.slice(0, 30).join(', ') || 'Not specified' }}\n\nRELEVANT PASSAGES FROM THE BOOK:\n{{ $json.contextPassages }}\n\n{{ $json.selectedText ? 'SELECTED TEXT (reader highlighted this): ' + $json.selectedText : '' }}\n\nGuidelines:\n1. Answer based primarily on the book's content and the relevant passages provided\n2. Explain concepts at an appropriate level for the reader's background\n3. Skip explanations of concepts they already know\n4. If asked about something not in the passages, say so and offer general knowledge with a note\n5. Reference specific chapters/sections when possible\n6. Be concise but thorough - academic but accessible\n7. If the reader selected text, focus your answer on explaining that specific passage"
+            },
+            {
+              "role": "user",
+              "content": "={{ $json.chatHistory.length > 0 ? 'Previous conversation:\\n' + $json.chatHistory.map(m => m.role + ': ' + m.content).join('\\n') + '\\n\\nNew question: ' : '' }}{{ $json.query }}"
+            }
+          ]
+        },
+        "options": {
+          "maxTokens": 1500
+        }
+      },
+      "id": "openai-chat",
+      "name": "Generate Response",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1.4,
+      "position": [1120, 400],
+      "credentials": {
+        "openAiApi": {
+          "id": "OPENAI_CREDENTIAL_ID",
+          "name": "OpenAI"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format response and extract any citations\nconst response = $json.message.content;\nconst contextUsed = $('Prepare Chat Context').item.json;\n\n// Extract chapter references from the response\nconst chapterRefs = response.match(/Chapter \\d+/gi) || [];\n\nreturn {\n  json: {\n    response: response,\n    sources: contextUsed.contextPassages ? {\n      chapters_referenced: [...new Set(chapterRefs)],\n      passages_used: $('Vector Search').all().length\n    } : null,\n    query: contextUsed.query\n  }\n};"
+      },
+      "id": "code-2",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1340, 400]
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "chat_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "user_id",
+              "fieldValue": "={{ $('Webhook').item.json.user_id }}"
+            },
+            {
+              "fieldName": "book_id",
+              "fieldValue": "={{ $('Webhook').item.json.book_id }}"
+            },
+            {
+              "fieldName": "role",
+              "fieldValue": "user"
+            },
+            {
+              "fieldName": "content",
+              "fieldValue": "={{ $json.query }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-4",
+      "name": "Store User Message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1560, 300],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "insert",
+        "tableId": "chat_messages",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldName": "user_id",
+              "fieldValue": "={{ $('Webhook').item.json.user_id }}"
+            },
+            {
+              "fieldName": "book_id",
+              "fieldValue": "={{ $('Webhook').item.json.book_id }}"
+            },
+            {
+              "fieldName": "role",
+              "fieldValue": "assistant"
+            },
+            {
+              "fieldName": "content",
+              "fieldValue": "={{ $('Format Response').item.json.response }}"
+            }
+          ]
+        }
+      },
+      "id": "supabase-5",
+      "name": "Store Assistant Message",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1560, 500],
+      "credentials": {
+        "supabaseApi": {
+          "id": "SUPABASE_CREDENTIAL_ID",
+          "name": "Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($('Format Response').item.json) }}",
+        "options": {}
+      },
+      "id": "respond-1",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1780, 400]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Embed Query",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get User Profile",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Book Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embed Query": {
+      "main": [
+        [
+          {
+            "node": "Vector Search",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vector Search": {
+      "main": [
+        [
+          {
+            "node": "Prepare Chat Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get User Profile": {
+      "main": [
+        [
+          {
+            "node": "Prepare Chat Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Book Info": {
+      "main": [
+        [
+          {
+            "node": "Prepare Chat Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Chat Context": {
+      "main": [
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Response": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Store User Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Store Assistant Message",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 0,
+  "updatedAt": "2024-01-01T00:00:00.000Z",
+  "versionId": "1"
+}
