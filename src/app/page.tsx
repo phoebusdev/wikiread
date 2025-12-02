@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import Link from 'next/link'
 import { processEpub, canConvert, incrementUsage, getRemainingConversions } from '@/lib/epub-processor'
 
 type ProcessingState = 'idle' | 'uploading' | 'processing' | 'success' | 'error' | 'limit-reached'
@@ -17,7 +18,7 @@ interface ProcessingResult {
 }
 
 // Compact Scholar teaser for hero
-function ScholarTeaser({ onLearnMore }: { onLearnMore: () => void }) {
+function ScholarTeaser() {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -25,8 +26,8 @@ function ScholarTeaser({ onLearnMore }: { onLearnMore: () => void }) {
       transition={{ delay: 0.4, duration: 0.5 }}
       className="mt-6"
     >
-      <button
-        onClick={onLearnMore}
+      <Link
+        href="/scholar"
         className="inline-flex items-center gap-2 px-3 py-1.5 bg-ink-700/5 hover:bg-ink-700/10 border border-ink-700/10 rounded-full text-xs text-ink-600 transition-colors group"
       >
         <span className="w-1.5 h-1.5 rounded-full bg-accent animate-pulse" />
@@ -38,7 +39,7 @@ function ScholarTeaser({ onLearnMore }: { onLearnMore: () => void }) {
         <svg className="w-3 h-3 text-ink-400 group-hover:translate-x-0.5 transition-transform" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
         </svg>
-      </button>
+      </Link>
     </motion.div>
   )
 }
@@ -277,9 +278,6 @@ export default function Home() {
     setError(null)
   }, [])
 
-  const scrollToScholar = useCallback(() => {
-    document.getElementById('scholar')?.scrollIntoView({ behavior: 'smooth' })
-  }, [])
 
   return (
     <div className="min-h-screen paper-texture paper-grain">
@@ -299,7 +297,7 @@ export default function Home() {
             </p>
 
             {/* Scholar teaser in hero */}
-            {state === 'idle' && <ScholarTeaser onLearnMore={scrollToScholar} />}
+            {state === 'idle' && <ScholarTeaser />}
           </motion.div>
         </div>
       </header>
@@ -603,7 +601,11 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="py-6 px-6 text-center">
+      <footer className="py-8 px-6 text-center border-t border-paper-200">
+        <div className="flex justify-center gap-6 text-sm text-ink-400 mb-4">
+          <Link href="/about" className="hover:text-ink-600 transition-colors">About</Link>
+          <Link href="/scholar" className="hover:text-ink-600 transition-colors">Scholar</Link>
+        </div>
         <p className="text-xs text-ink-300">
           Perfect for philosophy, history, and academic texts
         </p>
